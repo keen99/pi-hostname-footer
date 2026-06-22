@@ -1,0 +1,27 @@
+{
+  "name": "pi-hostname-footer",
+  "version": "1.0.0",
+  "description": "pi extension: custom footer with hostname prefix, full token/cost/context stats, and extension status line",
+  "keywords": ["pi-package", "pi-extension", "footer", "hostname"],
+  "license": "MIT",
+  "author": "David Raistrick",
+  "homepage": "https://github.com/keen99/pi-hostname-footer",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/keen99/pi-hostname-footer.git"
+  },
+  "type": "module",
+  "main": "./index.ts",
+  "scripts": {
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "echo 'nothing to check'"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}
