@@ -186,31 +186,45 @@ export default function (pi: ExtensionAPI) {
               : "";
             const rightSide = `${providerStr}${modelStr}${thinkingStr}`;
 
-            // Layout: stats left, model right, pad between
-            const statsWidth = visibleWidth(statsLeft);
-            const rightWidth = visibleWidth(rightSide);
-            let line2: string;
-            const minPadding = 2;
+            // Layout: wrap stats segments across lines, model on its own line if needed
+            const SEP = "  ";
+            const lines2: string[] = [];
+            let currentLine = "";
+            let currentWidth = 0;
 
-            if (statsWidth + minPadding + rightWidth <= width) {
-              const padding = " ".repeat(width - statsWidth - rightWidth);
-              line2 = statsLeft + padding + rightSide;
-            } else {
-              const availableForRight = width - statsWidth - minPadding;
-              if (availableForRight > 0) {
-                const truncatedRight = truncateToWidth(rightSide, availableForRight, "");
-                const truncatedRightWidth = visibleWidth(truncatedRight);
-                const padding = " ".repeat(Math.max(0, width - statsWidth - truncatedRightWidth));
-                line2 = statsLeft + padding + truncatedRight;
+            for (const part of statsParts) {
+              const partWidth = visibleWidth(part);
+              const sepWidth = currentLine ? visibleWidth(SEP) : 0;
+              if (currentWidth + sepWidth + partWidth <= width) {
+                currentLine += (currentLine ? SEP : "") + part;
+                currentWidth += sepWidth + partWidth;
               } else {
-                line2 = statsLeft;
+                if (currentLine) lines2.push(currentLine);
+                if (partWidth > width) {
+                  lines2.push(truncateToWidth(part, width, theme.fg("dim", "…")));
+                  currentLine = "";
+                  currentWidth = 0;
+                } else {
+                  currentLine = part;
+                  currentWidth = partWidth;
+                }
               }
+            }
+            if (currentLine) lines2.push(currentLine);
+
+            // Model always on its own line, right-justified
+            const rWidth = visibleWidth(rightSide);
+            if (rWidth <= width) {
+              const pad = " ".repeat(Math.max(0, width - rWidth));
+              lines2.push(pad + rightSide);
+            } else {
+              lines2.push(truncateToWidth(rightSide, width, theme.fg("dim", "…")));
             }
 
             // Truncate line 1 if needed
             line1 = truncateToWidth(line1, width, theme.fg("dim", "..."));
 
-            const lines = [line1, line2];
+            const lines = [line1, ...lines2];
 
             // Extension statuses (line 3+)
             const extensionStatuses = footerData.getExtensionStatuses();
