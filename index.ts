@@ -1,10 +1,8 @@
 /**
  * Custom Footer with Hostname Extension
  *
- * Built with pi (glm-4.7) on 2026-04-24
- *
- * Just adds hostname (shortname) to the front of the default footer.
- * No other changes to the footer format.
+ * Two-line footer with colored hostname, path + branch, and blended stats.
+ * Combines pi-hostname-footer layout with pi-statusline-style segments.
  */
 
 import type { AssistantMessage, ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -27,26 +25,33 @@ const HOSTNAME_COLORS = [
   "#bd93f9", // bright purple
 ];
 
-// Simple string hash to get consistent color for each hostname
 function hashString(str: string): number {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
     hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
+    hash = hash & hash;
   }
   return Math.abs(hash);
 }
 
-// Apply a hex color to text
 function colorize(text: string, color: string): string {
   return `\x1b[38;2;${parseInt(color.slice(1, 3), 16)};${parseInt(color.slice(3, 5), 16)};${parseInt(color.slice(5, 7), 16)}m${text}\x1b[0m`;
 }
 
+function formatTokens(count: number): string {
+  if (count < 1000) return count.toString();
+  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+  if (count < 1000000) return `${Math.round(count / 1000)}k`;
+  if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
+  return `${Math.round(count / 1000000)}M`;
+}
+
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
-    // Get short hostname
     const hostname = os.hostname().split(".")[0] || "unknown";
+    const colorIndex = hashString(hostname) % HOSTNAME_COLORS.length;
+    const hostnameColor = HOSTNAME_COLORS[colorIndex];
 
     ctx.ui.setFooter((tui, theme, footerData) => {
       const unsub = footerData.onBranchChange(() => tui.requestRender());
@@ -56,143 +61,115 @@ export default function (pi: ExtensionAPI) {
         invalidate() {},
         render(width: number): string[] {
           try {
-            // Calculate cumulative usage from ALL session entries
+            // ── Cumulative usage from all session entries ──
             let totalInput = 0;
             let totalOutput = 0;
-            let totalCacheRead = 0;
-            let totalCacheWrite = 0;
             let totalCost = 0;
             for (const entry of ctx.sessionManager.getBranch()) {
               if (entry.type === "message" && entry.message.role === "assistant") {
                 const m = entry.message as AssistantMessage;
                 totalInput += m.usage.input;
                 totalOutput += m.usage.output;
-                totalCacheRead += m.usage.cacheRead;
-                totalCacheWrite += m.usage.cacheWrite;
                 totalCost += m.usage.cost.total;
               }
             }
 
-            // Calculate context usage from session
-            const contextUsage = ctx.session?.getContextUsage();
+            // ── Context usage ──
+            const contextUsage = ctx.getContextUsage();
             const contextWindow = contextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
             const contextPercentValue = contextUsage?.percent ?? 0;
-            const contextPercent = contextUsage?.percent !== null ? contextPercentValue.toFixed(1) : "?";
+            const hasPercent = contextUsage?.percent !== null && contextUsage?.percent !== undefined;
+            const contextPercent = hasPercent ? contextPercentValue.toFixed(0) : "?";
 
-            // Format token counts
-            const formatTokens = (count: number) => {
-              if (count < 1000) return count.toString();
-              if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-              if (count < 1000000) return `${Math.round(count / 1000)}k`;
-              if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
-              return `${Math.round(count / 1000000)}M`;
-            };
-
-            // Replace home directory with ~
+            // ── LINE 1: hostname + path + branch ──
             let pwd = ctx.sessionManager.getCwd();
             const home = process.env.HOME || process.env.USERPROFILE;
             if (home && pwd.startsWith(home)) {
               pwd = `~${pwd.slice(home.length)}`;
             }
 
-            // Add git branch if available
+            let pathParts: string[] = [];
+            pathParts.push(colorize(`${hostname}@`, hostnameColor));
+            pathParts.push(`📁 ${pwd}`);
+
             const branch = footerData.getGitBranch();
             if (branch) {
-              pwd = `${pwd} (${branch})`;
+              pathParts.push(theme.fg("success", `🌿 ${branch}`));
             }
 
-            // Add session name if set
             const sessionName = ctx.sessionManager.getSessionName();
             if (sessionName) {
-              pwd = `${pwd} • ${sessionName}`;
+              pathParts.push(theme.fg("dim", `• ${sessionName}`));
             }
 
-            // Prepend hostname to pwd with a unique color for this hostname
-            const colorIndex = hashString(hostname) % HOSTNAME_COLORS.length;
-            const coloredHostname = colorize(hostname + "@", HOSTNAME_COLORS[colorIndex]);
-            pwd = `${coloredHostname} ${pwd}`;
+            let line1 = pathParts.join("  ");
 
-            // Build stats line
-            const statsParts: string[] = [];
-            if (totalInput) statsParts.push(`↑${formatTokens(totalInput)}`);
-            if (totalOutput) statsParts.push(`↓${formatTokens(totalOutput)}`);
-            if (totalCacheRead) statsParts.push(`R${formatTokens(totalCacheRead)}`);
-            if (totalCacheWrite) statsParts.push(`W${formatTokens(totalCacheWrite)}`);
-
-            // Show cost
-            statsParts.push(`$${totalCost.toFixed(3)}`);
-
-            // Colorize context percentage based on usage
-            let contextPercentStr: string;
-            const contextPercentDisplay = contextPercent === "?"
-              ? `?/${formatTokens(contextWindow)} (auto)`
-              : `${contextPercent}%/${formatTokens(contextWindow)} (auto)`;
-
-            if (contextPercentValue > 90) {
-              contextPercentStr = theme.fg("error", contextPercentDisplay);
-            } else if (contextPercentValue > 70) {
-              contextPercentStr = theme.fg("warning", contextPercentDisplay);
+            // ── LINE 2: stats left, model right ──
+            // Context segment — colorize by threshold
+            const ctxMax = formatTokens(contextWindow);
+            const ctxDisplay = hasPercent
+              ? `ctx ${contextPercent}%/${ctxMax} (auto)`
+              : `ctx ?/${ctxMax} (auto)`;
+            let ctxStr: string;
+            if (hasPercent && contextPercentValue > 90) {
+              ctxStr = theme.fg("error", ctxDisplay);
+            } else if (hasPercent && contextPercentValue > 70) {
+              ctxStr = theme.fg("warning", ctxDisplay);
             } else {
-              contextPercentStr = contextPercentDisplay;
-            }
-            statsParts.push(contextPercentStr);
-
-            let statsLeft = statsParts.join(" ");
-            let statsLeftWidth = visibleWidth(statsLeft);
-
-            // If statsLeft is too wide, truncate it
-            if (statsLeftWidth > width) {
-              statsLeft = truncateToWidth(statsLeft, width, "...");
-              statsLeftWidth = visibleWidth(statsLeft);
+              ctxStr = theme.fg("accent", ctxDisplay);
             }
 
-            // Add model name on the right side, plus thinking level if model supports it
+            const statsParts: string[] = [ctxStr];
+            if (totalInput || totalOutput) {
+              statsParts.push(theme.fg("mdLink", `🔢 ↑${formatTokens(totalInput)} ↓${formatTokens(totalOutput)}`));
+            }
+            statsParts.push(theme.fg("warning", `💸 $${totalCost.toFixed(3)}`));
+
+            let statsLeft = statsParts.join("  ");
+
+            // Model right side
             const modelName = ctx.model?.id || "no-model";
-            let rightSideWithoutProvider = modelName;
-            if (ctx.model?.reasoning) {
-              const thinkingLevel = pi.getThinkingLevel() || "off";
-              rightSideWithoutProvider = thinkingLevel === "off"
-                ? `${modelName} • thinking off`
-                : `${modelName} • ${thinkingLevel}`;
-            }
+            const provider = ctx.model?.provider;
+            const thinkingLevel = pi.getThinkingLevel() || "off";
+            const thinkingSuffix = ctx.model?.reasoning
+              ? (thinkingLevel === "off" ? " • thinking off" : ` • 🧠 ${thinkingLevel}`)
+              : "";
+            const providerStr = provider ? theme.fg("muted", `(${provider}) `) : "";
+            const modelStr = theme.fg("accent", `🤖 ${modelName}`);
+            const thinkingStr = ctx.model?.reasoning
+              ? (thinkingLevel === "off"
+                ? theme.fg("dim", " • thinking off")
+                : ` • ${theme.fg("accent", "🧠")} ${theme.fg("accent", thinkingLevel)}`)
+              : "";
+            const rightSide = `${providerStr}${modelStr}${thinkingStr}`;
 
-            // Prepend the provider in parentheses if there are multiple providers
-            let rightSide = rightSideWithoutProvider;
-            if (footerData.getAvailableProviderCount() > 1 && ctx.model) {
-              rightSide = `(${ctx.model.provider}) ${rightSideWithoutProvider}`;
-              if (statsLeftWidth + 2 + visibleWidth(rightSide) > width) {
-                rightSide = rightSideWithoutProvider;
-              }
-            }
-
-            const rightSideWidth = visibleWidth(rightSide);
+            // Layout: stats left, model right, pad between
+            const statsWidth = visibleWidth(statsLeft);
+            const rightWidth = visibleWidth(rightSide);
+            let line2: string;
             const minPadding = 2;
-            const totalNeeded = statsLeftWidth + minPadding + rightSideWidth;
-            let statsLine: string;
 
-            if (totalNeeded <= width) {
-              const padding = " ".repeat(width - statsLeftWidth - rightSideWidth);
-              statsLine = statsLeft + padding + rightSide;
+            if (statsWidth + minPadding + rightWidth <= width) {
+              const padding = " ".repeat(width - statsWidth - rightWidth);
+              line2 = statsLeft + padding + rightSide;
             } else {
-              const availableForRight = width - statsLeftWidth - minPadding;
+              const availableForRight = width - statsWidth - minPadding;
               if (availableForRight > 0) {
                 const truncatedRight = truncateToWidth(rightSide, availableForRight, "");
                 const truncatedRightWidth = visibleWidth(truncatedRight);
-                const padding = " ".repeat(Math.max(0, width - statsLeftWidth - truncatedRightWidth));
-                statsLine = statsLeft + padding + truncatedRight;
+                const padding = " ".repeat(Math.max(0, width - statsWidth - truncatedRightWidth));
+                line2 = statsLeft + padding + truncatedRight;
               } else {
-                statsLine = statsLeft;
+                line2 = statsLeft;
               }
             }
 
-            const dimStatsLeft = theme.fg("dim", statsLeft);
-            const remainder = statsLine.slice(statsLeft.length);
-            const dimRemainder = theme.fg("dim", remainder);
+            // Truncate line 1 if needed
+            line1 = truncateToWidth(line1, width, theme.fg("dim", "..."));
 
-            const pwdLine = truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "..."));
-            const lines = [pwdLine, dimStatsLeft + dimRemainder];
+            const lines = [line1, line2];
 
-            // Add extension statuses
+            // Extension statuses (line 3+)
             const extensionStatuses = footerData.getExtensionStatuses();
             if (extensionStatuses.size > 0) {
               const sortedStatuses = Array.from(extensionStatuses.entries())
@@ -204,10 +181,12 @@ export default function (pi: ExtensionAPI) {
 
             return lines;
           } catch (error) {
-            // Session is stale (exiting/reloading), return minimal footer
-            const colorIndex = hashString(hostname) % HOSTNAME_COLORS.length;
-            const coloredHostname = colorize(hostname + "@", HOSTNAME_COLORS[colorIndex]);
-            const pwdLine = truncateToWidth(theme.fg("dim", `${coloredHostname} Session ending...`), width, theme.fg("dim", "..."));
+            const coloredHostname = colorize(`${hostname}@`, hostnameColor);
+            const pwdLine = truncateToWidth(
+              theme.fg("dim", `${coloredHostname} Session ending...`),
+              width,
+              theme.fg("dim", "..."),
+            );
             return [pwdLine];
           }
         },
