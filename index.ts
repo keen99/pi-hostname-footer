@@ -48,6 +48,23 @@ function formatTokens(count: number): string {
 }
 
 export default function (pi: ExtensionAPI) {
+  // Runtime state for tool activity tracking
+  const activeTools = new Map<string, number>();
+  let lastCompletedTool: string | undefined;
+
+  pi.on("tool_execution_start", (event) => {
+    const name = event.toolName || "tool";
+    activeTools.set(name, (activeTools.get(name) ?? 0) + 1);
+  });
+
+  pi.on("tool_execution_end", (event) => {
+    const name = event.toolName || "tool";
+    const count = activeTools.get(name) ?? 0;
+    if (count <= 1) activeTools.delete(name);
+    else activeTools.set(name, count - 1);
+    lastCompletedTool = name;
+  });
+
   pi.on("session_start", async (_event, ctx) => {
     const hostname = os.hostname().split(".")[0] || "unknown";
     const colorIndex = hashString(hostname) % HOSTNAME_COLORS.length;
@@ -64,13 +81,19 @@ export default function (pi: ExtensionAPI) {
             // ── Cumulative usage from all session entries ──
             let totalInput = 0;
             let totalOutput = 0;
+            let totalCacheRead = 0;
+            let totalCacheWrite = 0;
             let totalCost = 0;
+            let turnCount = 0;
             for (const entry of ctx.sessionManager.getBranch()) {
               if (entry.type === "message" && entry.message.role === "assistant") {
                 const m = entry.message as AssistantMessage;
                 totalInput += m.usage.input;
                 totalOutput += m.usage.output;
+                totalCacheRead += m.usage.cacheRead || 0;
+                totalCacheWrite += m.usage.cacheWrite || 0;
                 totalCost += m.usage.cost.total;
+                turnCount++;
               }
             }
 
@@ -123,7 +146,27 @@ export default function (pi: ExtensionAPI) {
             if (totalInput || totalOutput) {
               statsParts.push(theme.fg("mdLink", `🔢 ↑${formatTokens(totalInput)} ↓${formatTokens(totalOutput)}`));
             }
+            if (totalCacheRead || totalCacheWrite) {
+              statsParts.push(theme.fg("success", `💾 R${formatTokens(totalCacheRead)}`));
+            }
             statsParts.push(theme.fg("warning", `💸 $${totalCost.toFixed(3)}`));
+            if (turnCount > 0) {
+              statsParts.push(theme.fg("muted", `🔁 ${turnCount}`));
+            }
+
+            // Tool activity
+            const active = [...activeTools.entries()];
+            let toolStr: string;
+            if (active.length > 0) {
+              const [name, count] = active[0];
+              const suffix = count > 1 ? `×${count}` : active.length > 1 ? `+${active.length - 1}` : "";
+              toolStr = theme.fg("toolTitle", `⚙ ${name}${suffix}`);
+            } else if (lastCompletedTool) {
+              toolStr = theme.fg("dim", `✅ ${lastCompletedTool}`);
+            } else {
+              toolStr = "";
+            }
+            if (toolStr) statsParts.push(toolStr);
 
             let statsLeft = statsParts.join("  ");
 
