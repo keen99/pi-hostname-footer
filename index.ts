@@ -212,11 +212,21 @@ export default function (pi: ExtensionAPI) {
             }
             if (currentLine) lines2.push(currentLine);
 
-            // Model always on its own line, right-justified
+            // Model: try last stats line first (right-aligned), else own line
             const rWidth = visibleWidth(rightSide);
-            if (rWidth <= width) {
+            const lastIdx = lines2.length - 1;
+            const lastW = lastIdx >= 0 ? visibleWidth(lines2[lastIdx]) : -1;
+            const minPad = 2;
+
+            if (lastIdx >= 0 && lastW + minPad + rWidth <= width) {
+              const pad = " ".repeat(width - lastW - rWidth);
+              lines2[lastIdx] = lines2[lastIdx] + pad + rightSide;
+            } else if (lastIdx < 0 && rWidth <= width) {
+              // No stats, model alone
               const pad = " ".repeat(Math.max(0, width - rWidth));
               lines2.push(pad + rightSide);
+            } else if (rWidth <= width) {
+              lines2.push(" ".repeat(Math.max(0, width - rWidth)) + rightSide);
             } else {
               lines2.push(truncateToWidth(rightSide, width, theme.fg("dim", "…")));
             }
