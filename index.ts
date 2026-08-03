@@ -212,7 +212,17 @@ export default function (pi: ExtensionAPI) {
               statsParts.push(theme.fg("mdLink", `🔢 ↑${formatTokens(totalInput)} ↓${formatTokens(totalOutput)}`));
             }
             if (totalCacheRead || totalCacheWrite) {
-              statsParts.push(theme.fg("success", `💾 R${formatTokens(totalCacheRead)}`));
+              const cacheHitRate = totalInput > 0
+                ? Math.round((totalCacheRead / (totalCacheRead + totalInput)) * 100)
+                : 0;
+              const cacheColor = cacheHitRate >= 90
+                ? "success"
+                : cacheHitRate >= 50
+                  ? "warning"
+                  : "error";
+              statsParts.push(
+                theme.fg(cacheColor, `💾 R${formatTokens(totalCacheRead)}/${cacheHitRate}%`),
+              );
             }
             statsParts.push(theme.fg("warning", `💸 $${totalCost.toFixed(3)}`));
             if (turnCount > 0) {
