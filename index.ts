@@ -5,9 +5,10 @@
  * Combines pi-hostname-footer layout with pi-statusline-style segments.
  */
 
-import type { AssistantMessage, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import os from "node:os";
+import { resolveGitStatus, type GitStatus } from "./git-status.js";
 
 // A curated palette of colors for hostnames - each hostname gets a consistent color
 const HOSTNAME_COLORS = [
@@ -47,10 +48,61 @@ function formatTokens(count: number): string {
   return `${Math.round(count / 1000000)}M`;
 }
 
+type ThemeColor = "success" | "warning" | "error" | "accent" | "dim";
+
+/**
+ * Build a compact git status suffix for the branch segment.
+ *   clean       → " ✓"
+ *   dirty       → " ●{N}"     (staged + unstaged + untracked)
+ *   ahead/behind→ " ↑{N}" / " ↓{N}"
+ * Color chosen by most severe state: dirty=warning, ahead/behind=accent, clean=success.
+ */
+function formatStatusIndicator(status: GitStatus): { text: string; color: ThemeColor } {
+  const parts: string[] = [];
+  if (status.dirtyCount > 0) parts.push(`\u25cf${status.dirtyCount}`); // ●
+  if (status.ahead > 0) parts.push(`\u2191${status.ahead}`);          // ↑
+  if (status.behind > 0) parts.push(`\u2193${status.behind}`);        // ↓
+
+  if (parts.length === 0) return { text: " \u2713", color: "success" }; // ✓
+
+  let color: ThemeColor;
+  if (status.dirtyCount > 0) color = "warning";
+  else color = "accent"; // diverged but clean tree
+
+  return { text: ` ${parts.join(" ")}`, color };
+}
+
 export default function (pi: ExtensionAPI) {
   // Runtime state for tool activity tracking
   const activeTools = new Map<string, number>();
   let lastCompletedTool: string | undefined;
+
+  // Cached git status. Refreshed on branch change, tool end, and interval.
+  let cachedStatus: { cwd: string; status: GitStatus } | undefined;
+  const STATUS_TTL_MS = 5_000;
+  let statusTimer: NodeJS.Timeout | undefined;
+
+  function refreshStatus(cwd: string): GitStatus {
+    if (cachedStatus && cachedStatus.cwd === cwd) return cachedStatus.status;
+    const status = resolveGitStatus(cwd);
+    cachedStatus = { cwd, status };
+    return status;
+  }
+
+  function startStatusPoll(requestRender: () => void) {
+    if (statusTimer) return;
+    statusTimer = setInterval(() => {
+      cachedStatus = undefined;
+      requestRender();
+    }, STATUS_TTL_MS);
+  }
+
+  function stopStatusPoll() {
+    if (statusTimer) {
+      clearInterval(statusTimer);
+      statusTimer = undefined;
+    }
+  }
 
   pi.on("tool_execution_start", (event) => {
     const name = event.toolName || "tool";
@@ -63,6 +115,8 @@ export default function (pi: ExtensionAPI) {
     if (count <= 1) activeTools.delete(name);
     else activeTools.set(name, count - 1);
     lastCompletedTool = name;
+    // Tools may mutate the worktree (edit/write/bash) — invalidate cached status.
+    cachedStatus = undefined;
   });
 
   pi.on("session_start", async (_event, ctx) => {
@@ -71,10 +125,18 @@ export default function (pi: ExtensionAPI) {
     const hostnameColor = HOSTNAME_COLORS[colorIndex];
 
     ctx.ui.setFooter((tui, theme, footerData) => {
-      const unsub = footerData.onBranchChange(() => tui.requestRender());
+      const requestRender = () => tui.requestRender();
+      const unsub = footerData.onBranchChange(() => {
+        cachedStatus = undefined;
+        requestRender();
+      });
+      startStatusPoll(requestRender);
 
       return {
-        dispose: unsub,
+        dispose: () => {
+          unsub();
+          stopStatusPoll();
+        },
         invalidate() {},
         render(width: number): string[] {
           try {
@@ -87,7 +149,7 @@ export default function (pi: ExtensionAPI) {
             let turnCount = 0;
             for (const entry of ctx.sessionManager.getBranch()) {
               if (entry.type === "message" && entry.message.role === "assistant") {
-                const m = entry.message as AssistantMessage;
+                const m = entry.message as { usage: { input: number; output: number; cacheRead?: number; cacheWrite?: number; cost: { total: number } } };
                 totalInput += m.usage.input;
                 totalOutput += m.usage.output;
                 totalCacheRead += m.usage.cacheRead || 0;
@@ -117,7 +179,10 @@ export default function (pi: ExtensionAPI) {
 
             const branch = footerData.getGitBranch();
             if (branch) {
-              pathParts.push(theme.fg("success", `🌿 ${branch}`));
+              const status = refreshStatus(ctx.sessionManager.getCwd());
+              const indicator = formatStatusIndicator(status);
+              const branchStr = `🌿 ${branch}${indicator.text}`;
+              pathParts.push(theme.fg(indicator.color, branchStr));
             }
 
             const sessionName = ctx.sessionManager.getSessionName();
