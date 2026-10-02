@@ -192,6 +192,20 @@ export default function (pi: ExtensionAPI) {
 
             let line1 = pathParts.join("  ");
 
+            // Session ID, right-aligned at end of line 1 (short form)
+            const sessionId = ctx.sessionManager.getSessionId();
+            const shortSessionId = sessionId ? sessionId.slice(0, 8) : undefined;
+            const sessionRight = shortSessionId ? theme.fg("dim", `⌗ ${shortSessionId}`) : "";
+            const srWidth = visibleWidth(sessionRight);
+            if (sessionRight && srWidth + 2 <= width) {
+              const leftMax = width - srWidth - 2;
+              if (visibleWidth(line1) > leftMax) {
+                line1 = truncateToWidth(line1, leftMax, theme.fg("dim", "..."));
+              }
+              const pad1 = " ".repeat(Math.max(0, leftMax - visibleWidth(line1)));
+              line1 = line1 + pad1 + sessionRight;
+            }
+
             // ── LINE 2: stats left, model right ──
             // Context segment — colorize by threshold
             const ctxMax = formatTokens(contextWindow);
@@ -305,9 +319,6 @@ export default function (pi: ExtensionAPI) {
             } else {
               lines2.push(truncateToWidth(rightSide, width, theme.fg("dim", "…")));
             }
-
-            // Truncate line 1 if needed
-            line1 = truncateToWidth(line1, width, theme.fg("dim", "..."));
 
             const lines = [line1, ...lines2];
 
