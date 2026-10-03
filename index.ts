@@ -72,6 +72,62 @@ function formatStatusIndicator(status: GitStatus): { text: string; color: ThemeC
   return { text: ` ${parts.join(" ")}`, color };
 }
 
+/**
+ * Word-wrap a single status string to terminal width. Used when one injected
+ * status is wider than the footer (e.g. usage-status quota line) so it wraps
+ * instead of truncating. Splits on whitespace; ANSI escape codes contain no
+ * spaces so raw splitting is safe. A single word wider than width is
+ * hard-chunked only when ANSI-free; colored oversized words fall back to
+ * truncation to avoid splitting escape sequences mid-stream.
+ */
+function wrapStatusToWidth(s: string, width: number): string[] {
+  if (visibleWidth(s) <= width) return [s];
+  const out: string[] = [];
+  let line = "";
+  let lineW = 0;
+  for (const word of s.split(/\s+/).filter(Boolean)) {
+    const wW = visibleWidth(word);
+    if (wW > width) {
+      if (line) {
+        out.push(line);
+        line = "";
+        lineW = 0;
+      }
+      if (/\x1b\[/.test(word)) {
+        out.push(truncateToWidth(word, width, "…"));
+        continue;
+      }
+      let chunk = "";
+      let chunkW = 0;
+      for (const ch of Array.from(word)) {
+        const cw = visibleWidth(ch);
+        if (chunkW + cw > width) {
+          out.push(chunk);
+          chunk = ch;
+          chunkW = cw;
+        } else {
+          chunk += ch;
+          chunkW += cw;
+        }
+      }
+      line = chunk;
+      lineW = chunkW;
+      continue;
+    }
+    const sepW = line ? 1 : 0;
+    if (line && lineW + sepW + wW > width) {
+      out.push(line);
+      line = word;
+      lineW = wW;
+    } else {
+      line += (line ? " " : "") + word;
+      lineW += sepW + wW;
+    }
+  }
+  if (line) out.push(line);
+  return out;
+}
+
 export default function (pi: ExtensionAPI) {
   // Runtime state for tool activity tracking
   const activeTools = new Map<string, number>();
@@ -190,20 +246,44 @@ export default function (pi: ExtensionAPI) {
               pathParts.push(theme.fg("dim", `• ${sessionName}`));
             }
 
-            let line1 = pathParts.join("  ");
+            // Line 1 segments wrap: hostname, path, branch, session name each
+            // a segment; spill to a new line at terminal width. Session ID
+            // stays right-aligned on the last of these lines.
+            const L1_SEP = "  ";
+            const l1Segs = pathParts.map((s) =>
+              visibleWidth(s) > width ? truncateToWidth(s, width, theme.fg("dim", "…")) : s,
+            );
+            const l1Lines: string[] = [];
+            let l1Seg = "";
+            let l1W = 0;
+            for (const s of l1Segs) {
+              const sw = visibleWidth(s);
+              const sepW = l1Seg ? visibleWidth(L1_SEP) : 0;
+              if (l1Seg && l1W + sepW + sw > width) {
+                l1Lines.push(l1Seg);
+                l1Seg = s;
+                l1W = sw;
+              } else {
+                l1Seg += (l1Seg ? L1_SEP : "") + s;
+                l1W += sepW + sw;
+              }
+            }
+            if (l1Seg) l1Lines.push(l1Seg);
 
-            // Session ID, right-aligned at end of line 1 (short form)
+            // Session ID, right-aligned at end of last line-1 line (short form)
             const sessionId = ctx.sessionManager.getSessionId();
             const shortSessionId = sessionId ? sessionId.slice(0, 8) : undefined;
             const sessionRight = shortSessionId ? theme.fg("dim", `⌗ ${shortSessionId}`) : "";
             const srWidth = visibleWidth(sessionRight);
-            if (sessionRight && srWidth + 2 <= width) {
-              const leftMax = width - srWidth - 2;
-              if (visibleWidth(line1) > leftMax) {
-                line1 = truncateToWidth(line1, leftMax, theme.fg("dim", "..."));
+            if (sessionRight) {
+              const lastIdx = l1Lines.length - 1;
+              const lastW = lastIdx >= 0 ? visibleWidth(l1Lines[lastIdx]) : -1;
+              if (lastIdx >= 0 && lastW + 2 + srWidth <= width) {
+                const pad1 = " ".repeat(Math.max(0, width - lastW - srWidth));
+                l1Lines[lastIdx] = l1Lines[lastIdx] + pad1 + sessionRight;
+              } else if (srWidth <= width) {
+                l1Lines.push(" ".repeat(Math.max(0, width - srWidth)) + sessionRight);
               }
-              const pad1 = " ".repeat(Math.max(0, leftMax - visibleWidth(line1)));
-              line1 = line1 + pad1 + sessionRight;
             }
 
             // ── LINE 2: stats left, model right ──
@@ -320,16 +400,34 @@ export default function (pi: ExtensionAPI) {
               lines2.push(truncateToWidth(rightSide, width, theme.fg("dim", "…")));
             }
 
-            const lines = [line1, ...lines2];
+            const lines = [...l1Lines, ...lines2];
 
-            // Extension statuses (line 3+)
+            // Extension statuses (line 3+): segment wrap. Each injected status is
+            // a segment; segments fill left-to-right and spill to a new line when
+            // they hit terminal width, so nothing is truncated off the right edge.
             const extensionStatuses = footerData.getExtensionStatuses();
             if (extensionStatuses.size > 0) {
+              const STATUS_SEP = "  ";
               const sortedStatuses = Array.from(extensionStatuses.entries())
                 .sort(([a], [b]) => a.localeCompare(b))
-                .map(([, text]) => text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim());
-              const statusLine = sortedStatuses.join(" ");
-              lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
+                .map(([, text]) => text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim())
+                .filter((s) => s.length > 0)
+                .flatMap((s) => wrapStatusToWidth(s, width));
+              let statusSeg = "";
+              let segWidth = 0;
+              for (const s of sortedStatuses) {
+                const sw = visibleWidth(s);
+                const sepW = statusSeg ? visibleWidth(STATUS_SEP) : 0;
+                if (statusSeg && segWidth + sepW + sw > width) {
+                  lines.push(statusSeg);
+                  statusSeg = s;
+                  segWidth = sw;
+                } else {
+                  statusSeg += (statusSeg ? STATUS_SEP : "") + s;
+                  segWidth += sepW + sw;
+                }
+              }
+              if (statusSeg) lines.push(statusSeg);
             }
 
             return lines;
