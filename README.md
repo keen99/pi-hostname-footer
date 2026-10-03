@@ -28,6 +28,10 @@ If the session is stale (exiting/reloading), the footer degrades to a minimal "S
 ## Install
 
 ```bash
+# authenticated (ssh — private repos)
+pi install git:git@github.com:keen99/pi-hostname-footer
+
+# public (https)
 pi install git:github.com/keen99/pi-hostname-footer
 ```
 
