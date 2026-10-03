@@ -12,6 +12,11 @@ concurrency:
   group: release-watch
   cancel-in-progress: false
 
+# Publish step bot-commits latest-tested.json to main. Repo default token
+# perms are read-only; without this the push exits 128.
+permissions:
+  contents: write
+
 jobs:
   watch:
     runs-on: ubuntu-latest
