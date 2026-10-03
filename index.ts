@@ -6,8 +6,11 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import os from "node:os";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { resolveGitStatus, type GitStatus } from "./git-status.js";
 
 // A curated palette of colors for hostnames - each hostname gets a consistent color
@@ -443,5 +446,16 @@ export default function (pi: ExtensionAPI) {
         },
       };
     });
+
+    // Deep-smoke marker (release matrix): proves session_start ran and the
+    // footer factory was installed on this pi version.
+    if (process.env.FOOTER_DEBUG === "1") {
+      try {
+        writeFileSync(
+          join(getAgentDir(), "hostname-footer-installed.json"),
+          JSON.stringify({ installed: true }, null, 2) + "\n",
+        );
+      } catch {}
+    }
   });
 }

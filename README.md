@@ -29,6 +29,21 @@ If the session is stale (exiting/reloading), the footer degrades to a minimal "S
 pi install git:github.com/keen99/pi-hostname-footer
 ```
 
+## Development
+
+```bash
+npm run typecheck    # tsc --noEmit
+npm test             # unit tests (real footer component, real pi-tui)
+npm run test:matrix  # smoke on every published pi release >= 0.75.0
+```
+
+Matrix boots each pinned pi release in RPC mode with this extension loaded
+(`--no-extensions` to isolate) and asserts the footer factory installs via the
+real `session_start` handler. Set `FOOTER_DEBUG=1` in the environment to have
+the extension write an install marker file into the agent dir; the smoke
+asserts it. Cached installs live in `.matrix-cache/` and are reused across
+runs; new pi releases are picked up automatically.
+
 ## License
 
 MIT
