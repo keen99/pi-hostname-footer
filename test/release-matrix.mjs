@@ -104,6 +104,7 @@ if (failed > 0) {
   process.exit(1);
 }
 
+const oldest = versions[0];
 const newest = versions[versions.length - 1];
 writeFileSync(join(cacheRoot, '.latest-tested'), `${newest}\n`);
 console.log(`[matrix] all ${versions.length} version(s) pass (${oldest} → ${newest})`);
