@@ -53,15 +53,12 @@ jobs:
         run: npm run test:matrix
         # Matrix script writes latest-tested.json (range badge) and the
         # .latest-tested skip-marker itself, only on a fully green run.
-      - name: Publish badge to main
-        if: steps.check.outputs.skip != 'true' && github.ref == 'refs/heads/main'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add latest-tested.json
-          RANGE=$(node -p "require('./latest-tested.json').message")
-          git diff --cached --quiet || git commit -m "chore: tested $RANGE [skip ci]"
-          git push
+      - name: Sync tested tags
+        if: always() && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node test/sync-tested-tags.mjs
       - name: Summarize
         if: always()
         run: |

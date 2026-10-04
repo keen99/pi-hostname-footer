@@ -10,6 +10,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Sync tested tags creates/deletes releases via GITHUB_TOKEN — repo default is read-only.
+permissions:
+  contents: write
+
 jobs:
   check:
     name: Typecheck + unit tests
@@ -45,3 +49,9 @@ jobs:
           restore-keys: |
             pi-matrix-
       - run: npm run test:matrix
+      - name: Sync tested tags
+        if: always() && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node test/sync-tested-tags.mjs

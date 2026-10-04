@@ -1,6 +1,7 @@
 # pi-hostname-footer
 
-[![pi releases tested](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/keen99/pi-hostname-footer/main/latest-tested.json)](https://github.com/keen99/pi-hostname-footer/actions/workflows/release-watch.yml)
+![release-watch](https://github.com/keen99/pi-hostname-footer/actions/workflows/release-watch.yml/badge.svg)
+[![pi tested](https://img.shields.io/github/v/release/keen99/pi-hostname-footer?label=pi%20tested%200.75.0%20%E2%86%92)](https://github.com/keen99/pi-hostname-footer/releases)
 
 A [pi](https://pi.dev) extension that replaces the default footer with a richer one: a colored hostname prefix, full token/cost/context-window stats, model + thinking level, and an extension status line.
 
